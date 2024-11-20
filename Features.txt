@@ -1,0 +1,51 @@
+Features:
+
+- GUI 
+-> Tabbed interface (for different applications)
+->> HIDS (Host-based)  11/21
+->> NIDS (Network-based) (???)
+->> Process Monitor 11/21
+->> Custom (undefined)
+
+
+- HIDS
+->traffic analysis
+-> SYN packet Monitoring
+->> users can define ports to watch  11/21
+-> SYN threshold alert
+->> alerts user when threshold is reached
+->> provide visual feedback when threshold is reached (*WIP) 
+-> Dynamic Charts
+->> real-time plotting of SYN packets received (*WIP)
+
+
+- Process Monitoring
+-> user defined CPU and memory thresholds  11/21
+->> allow user to define limits
+-> real-time process monitor    11/21
+->> monitors system processes for limits
+-> alerts user for resource intensive processes
+->> when a process exceeds limits, user is alerted with a pop-up (*WIP)
+->> pop-up details process name, PID, CPU usage, and memory usage (*WIP)
+-> option for termination
+->> users can decide whether or not to terminate flagged processes (*WIP)
+
+
+- NIDS (*WIP) (???)
+-> tab for process monitoring, network traffic analysis, etc. (*WIP)
+-> packet filtering (*WIP)
+-> user defined anomaly detection (*WIP)
+-> traffic analysis (*WIP)
+
+– VM/server/machine deployment – scripts to simulate intrusion/attacks 11/21
+
+- Other
+-> cross-platform applicable 
+-> SYN packets and Processes are monitored via separate threads to ensure GUI functionality
+
+
+- Future developments
+-> eventual expansion into logging (*WIP)
+-> output into a log file for auditing
+-> user customization of alerts for user defined behavior
+-> AI involvement

@@ -1,98 +1,112 @@
-# OLDER VERSION - CURRENTLY WORKING #
-
-# VERSION 3 #
-
+# VERSION 5 #
 import tkinter as tk
 from tkinter import ttk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.animation import FuncAnimation
-from scapy.all import sniff, TCP
+from scapy.all import sniff, TCP, get_if_list, conf
 import threading
-import psutil 
+import psutil
 import time
 
-#define the main GUI window class
+
+def get_valid_interface():
+    """
+    Detects a valid network interface for sniffing.
+    Returns:
+        str: Name of a valid interface or None if no valid interface is found.
+    """
+    try:
+        interfaces = get_if_list()
+        print(f"Available interfaces: {interfaces}")
+
+        #check the default interface first
+        default_interface = conf.iface
+        if default_interface in interfaces:
+            print(f"Using default interface: {default_interface}")
+            return default_interface
+
+        #test each interface
+        for iface in interfaces:
+            try:
+                #test binding to the interface
+                sniff(iface=iface, count=1, timeout=1, store=0)
+                print(f"Valid interface found: {iface}")
+                return iface
+            except Exception as e:
+                print(f"Interface {iface} is not valid: {e}")
+
+        print("No valid interface found.")
+        return None
+    except Exception as e:
+        print(f"Error detecting network interfaces: {e}")
+        return None
+
+
 class MainWindow(tk.Tk):
     def __init__(self):
-        super().__init__() #initialize the parent class (tk.Tk)
-        self.title("Intrusion Detection System") #set the window title
-        self.geometry("800x680") #set the initial size of the window
-        self.configure(bg="#1E1E1E") #set the background color of the window
+        super().__init__()
+        self.title("Intrusion Detection System")
+        self.geometry("800x680")
+        self.configure(bg="#1E1E1E")
 
-        #initialize variables for GUI elements
-        self.radio_var = tk.StringVar() #variable for holding selected radio button value
-        self.syn_threshold = tk.IntVar() #variable for SYN packet threshold
-        self.ports_to_monitor = tk.StringVar() #variable for ports to monitor
-        self.cpu_threshold = tk.DoubleVar() #variable for CPU usage threshold
-        self.memory_threshold = tk.DoubleVar() #variable for memory usage threshold
+        self.radio_var = tk.StringVar()
+        self.syn_threshold = tk.IntVar()
+        self.ports_to_monitor = tk.StringVar()
+        self.cpu_threshold = tk.DoubleVar()
+        self.memory_threshold = tk.DoubleVar()
 
-        #initialize monitoring state and counters
-        self.syn_count = 0 #counter for detected SYN packets
-        self.monitoring = False #flag to indicate whether monitoring is active
-        self.sniff_thread = None #initialize thread for sniffing
-        self.process_monitoring_thread = None #initialize thread for process monitoring
+        self.syn_count = 0
+        self.syn_monitoring = False
+        self.process_monitoring = False
+        self.sniff_thread = None
+        self.process_monitoring_thread = None
 
-        #create the tabbed interface
+        self.protocol("WM_DELETE_WINDOW", self.close_application)
         self.create_tabs()
 
     def create_process_monitor_widgets(self, frame):
         header = tk.Label(frame, text="Process Monitor", font=("Courier", 24), bg="#1E1E1E", fg="#00FF00")
         header.pack(pady=10)
 
-        # Add widgets for displaying process information
         parameters_frame = tk.Frame(frame, bg="#1E1E1E", bd=2, relief=tk.SUNKEN)
         parameters_frame.pack(pady=10, padx=10, fill=tk.X)
 
         tk.Label(parameters_frame, text="CPU Usage Threshold (%):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         self.cpu_threshold_entry = tk.Entry(parameters_frame, textvariable=self.cpu_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
         self.cpu_threshold_entry.grid(row=0, column=1, padx=5, pady=5)
-        self.cpu_threshold.set(80.0)  # Default CPU threshold
+        self.cpu_threshold.set(80.0)
 
         tk.Label(parameters_frame, text="Memory Usage Threshold (%):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
         self.memory_threshold_entry = tk.Entry(parameters_frame, textvariable=self.memory_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
         self.memory_threshold_entry.grid(row=1, column=1, padx=5, pady=5)
-        self.memory_threshold.set(80.0)  # Default memory threshold
+        self.memory_threshold.set(80.0)
 
-        # Add a start/stop button for process monitoring
         control_frame = tk.Frame(frame, bg="#1E1E1E")
         control_frame.pack(pady=10)
 
-        start_button = tk.Button(control_frame, text="Start Process Monitoring", bg="#333333", fg="#00FF00", command=self.start_monitoring, font=("Courier", 12), activebackground="#00FF00", activeforeground="#1E1E1E")
+        start_button = tk.Button(control_frame, text="Start Process Monitoring", bg="#333333", fg="#00FF00", command=self.start_process_monitor, font=("Courier", 12), activebackground="#00FF00", activeforeground="#1E1E1E")
         start_button.grid(row=0, column=0, padx=5)
 
         stop_button = tk.Button(control_frame, text="Stop Process Monitoring", bg="#333333", fg="#FF4500", command=self.stop_monitoring, font=("Courier", 12), activebackground="#FF4500", activeforeground="#1E1E1E")
         stop_button.grid(row=0, column=1, padx=5)
 
-        # Add a placeholder for displaying flagged processes
         self.process_alert_label = tk.Label(frame, text="", font=("Courier", 14), bg="#1E1E1E", fg="#FF4500")
         self.process_alert_label.pack(pady=10)
 
-    #method to create tabs in the GUI
     def create_tabs(self):
-        #create a notebook (tabbed interface)
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(pady=10, expand=True)
 
-        #create frames for each tab
         self.hids_frame = tk.Frame(self.notebook, bg="#1E1E1E")
-        self.nids_frame = tk.Frame(self.notebook, bg="#1E1E1E")
-        self.custom_frame = tk.Frame(self.notebook, bg="#1E1E1E")
         self.process_monitor_frame = tk.Frame(self.notebook, bg="#1E1E1E")
 
-        #add frames to notebook (tabs)
         self.notebook.add(self.hids_frame, text="HIDS")
-        self.notebook.add(self.nids_frame, text="NIDS")
-        self.notebook.add(self.custom_frame, text="Custom")
         self.notebook.add(self.process_monitor_frame, text="Process Monitor")
 
-        #create widgets for each tab
         self.create_hids_widgets(self.hids_frame)
-        self.create_nids_widgets(self.nids_frame)
-        self.create_custom_widgets(self.custom_frame)
         self.create_process_monitor_widgets(self.process_monitor_frame)
 
-    #method to create widgets for the HIDS tab
     def create_hids_widgets(self, frame):
         header = tk.Label(frame, text="HIDS - SYN Packet Monitor", font=("Courier", 24), bg="#1E1E1E", fg="#00FF00")
         header.pack(pady=10)
@@ -103,28 +117,17 @@ class MainWindow(tk.Tk):
         tk.Label(parameters_frame, text="SYN Packet Threshold:", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         self.syn_threshold_entry = tk.Entry(parameters_frame, textvariable=self.syn_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
         self.syn_threshold_entry.grid(row=0, column=1, padx=5, pady=5)
-        self.syn_threshold.set(100) #set default threshold value
+        self.syn_threshold.set(100)
 
         tk.Label(parameters_frame, text="Ports to Monitor (comma-separated):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
         self.ports_entry = tk.Entry(parameters_frame, textvariable=self.ports_to_monitor, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
         self.ports_entry.grid(row=1, column=1, padx=5, pady=5)
-        self.ports_to_monitor.set("80,443") #set default ports to monitor
-
-        #add input fields for CPU and memory usage thresholds
-        tk.Label(parameters_frame, text="CPU Usage Threshold (%):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
-        self.cpu_threshold_entry = tk.Entry(parameters_frame, textvariable=self.cpu_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
-        self.cpu_threshold_entry.grid(row=2, column=1, padx=5, pady=5)
-        self.cpu_threshold.set(80.0) #default CPU threshold
-
-        tk.Label(parameters_frame, text="Memory Usage Threshold (%):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
-        self.memory_threshold_entry = tk.Entry(parameters_frame, textvariable=self.memory_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
-        self.memory_threshold_entry.grid(row=3, column=1, padx=5, pady=5)
-        self.memory_threshold.set(80.0) #default memory threshold
+        self.ports_to_monitor.set("80,443")
 
         control_frame = tk.Frame(frame, bg="#1E1E1E")
         control_frame.pack(pady=10)
 
-        start_button = tk.Button(control_frame, text="Start Monitoring", bg="#333333", fg="#00FF00", command=self.start_monitoring, font=("Courier", 12), activebackground="#00FF00", activeforeground="#1E1E1E")
+        start_button = tk.Button(control_frame, text="Start SYN Monitoring", bg="#333333", fg="#00FF00", command=self.start_syn_monitor, font=("Courier", 12), activebackground="#00FF00", activeforeground="#1E1E1E")
         start_button.grid(row=0, column=0, padx=5)
 
         stop_button = tk.Button(control_frame, text="Stop Monitoring", bg="#333333", fg="#FF4500", command=self.stop_monitoring, font=("Courier", 12), activebackground="#FF4500", activeforeground="#1E1E1E")
@@ -132,21 +135,6 @@ class MainWindow(tk.Tk):
 
         self.create_charts(frame)
 
-    #method to create widgets for the NIDS tab
-    def create_nids_widgets(self, frame):
-        header = tk.Label(frame, text="NIDS - Network Intrusion Detection", font=("Courier", 24), bg="#1E1E1E", fg="#00FF00")
-        header.pack(pady=10)
-
-        #add more NIDS-specific input fields and controls here
-
-    #method to create widgets for the Custom tab
-    def create_custom_widgets(self, frame):
-        header = tk.Label(frame, text="Custom Mode", font=("Courier", 24), bg="#1E1E1E", fg="#00FF00")
-        header.pack(pady=10)
-
-        #add more custom mode input fields and controls here
-
-    #method to create charts for displaying SYN packet counts
     def create_charts(self, frame):
         chart_frame = tk.Frame(frame, bg="#1E1E1E")
         chart_frame.pack(pady=10, fill=tk.BOTH, expand=True)
@@ -170,55 +158,80 @@ class MainWindow(tk.Tk):
 
         self.anim = FuncAnimation(self.fig, self.update_chart_animation, interval=1000, blit=False)
 
-    #method to start monitoring SYN packets and process usage
-    def start_monitoring(self):
-        self.monitoring = True
+    def start_syn_monitor(self):
+        self.syn_monitoring = True
         self.syn_count = 0
         self.monitor_ports = [int(port.strip()) for port in self.ports_to_monitor.get().split(",") if port.strip().isdigit()]
         print(f"Monitoring SYN packets on ports: {self.monitor_ports} with threshold {self.syn_threshold.get()}")
-        
-        #start packet sniffing in a new thread
-        self.sniff_thread = threading.Thread(target=self.start_packet_sniffing)
+
+        self.sniff_thread = threading.Thread(target=self.sniff_packets)
         self.sniff_thread.daemon = True
         self.sniff_thread.start()
 
-        #start process monitoring in a new thread
+    def start_process_monitor(self):
+        self.process_monitoring = True
+        print(f"Starting process monitoring. CPU threshold: {self.cpu_threshold.get()}%, "f"Memory threshold: {self.memory_threshold.get()}%")
         self.process_monitoring_thread = threading.Thread(target=self.monitor_processes)
         self.process_monitoring_thread.daemon = True
         self.process_monitoring_thread.start()
 
-    #method to stop monitoring SYN packets and processes
+    def stop_syn_monitor(self):
+        self.syn_monitoring = False
+        print("Stopped SYN monitoring.")
+
+    def stop_process_monitor(self):
+        self.process_monitoring = False
+        print("Stopped Process monitoring.")
+
+    def close_application(self):
+        """Gracefully close the application by stopping threads and destroying the window."""
+        print("Closing application...")
+        
+        #stop monitoring if running
+        if self.syn_monitoring or self.process_monitoring:
+            self.stop_monitoring()
+
+        #wait for threads to finish
+        if self.sniff_thread and self.sniff_thread.is_alive():
+            self.sniff_thread.join(timeout=1)
+        if self.process_monitoring_thread and self.process_monitoring_thread.is_alive():
+            self.process_monitoring_thread.join(timeout=1)
+
+        #destroy the main window
+        self.destroy()
+        print("Application closed.")
+
     def stop_monitoring(self):
-        self.monitoring = False
-        print("Stopped monitoring.")
+        if self.syn_monitoring:
+            self.stop_syn_monitor()
+        if self.process_monitoring:
+            self.stop_process_monitor()
 
-    #method to start sniffing network packets using Scapy
-    def start_packet_sniffing(self):
-        def process_packet(packet):
-            if not self.monitoring:
-                return False
+    def sniff_packets(self):
+        interface = get_valid_interface()
+        if not interface:
+            print("No valid network interface available for sniffing.")
+            return
 
-            if packet.haslayer(TCP) and packet[TCP].flags == 'S' and packet[TCP].dport in self.monitor_ports:
-                self.syn_count += 1
-                print(f"SYN packet detected on port {packet[TCP].dport}. Total SYN count: {self.syn_count}")
-                self.update_chart()
+        print(f"Sniffing on interface: {interface}")
+        try:
+            sniff(iface=interface, prn=self.process_packet, store=0, stop_filter=lambda x: not self.syn_monitoring)
+        except Exception as e:
+            print(f"Error in sniffing thread: {e}")
 
-                if self.syn_count >= self.syn_threshold.get():
-                    print("SYN packet threshold reached!")
-                    self.alert_user()
-                    self.stop_monitoring()
+    def process_packet(self, packet):
+        if packet.haslayer(TCP) and packet[TCP].flags == 'S' and packet[TCP].dport in self.monitor_ports:
+            self.syn_count += 1
+            print(f"SYN packet detected on port {packet[TCP].dport}. Total SYN count: {self.syn_count}")
+            self.update_chart()
 
-        # Run sniff in a separate thread
-        def sniff_packets():
-            sniff(prn=process_packet, store=0, stop_filter=lambda x: not self.monitoring)
+            if self.syn_count >= self.syn_threshold.get():
+                print("SYN packet threshold reached!")
+                self.alert_user()
+                self.stop_monitoring()
 
-        sniff_thread = threading.Thread(target=sniff_packets)
-        sniff_thread.daemon = True
-        sniff_thread.start()
-
-    #method to monitor system processes and kill those over threshold
     def monitor_processes(self):
-        while self.monitoring:
+        while self.process_monitoring:
             for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
                 try:
                     cpu_usage = proc.info['cpu_percent']
@@ -226,14 +239,13 @@ class MainWindow(tk.Tk):
 
                     if cpu_usage > self.cpu_threshold.get() or memory_usage > self.memory_threshold.get():
                         print(f"Killing process {proc.info['name']} (PID: {proc.info['pid']}) for exceeding thresholds. CPU: {cpu_usage}%, Memory: {memory_usage}%")
-                        proc.terminate() #terminate the process
+                        proc.terminate()
 
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     pass
 
-            time.sleep(5) #check processes every 5 seconds
+            time.sleep(5)
 
-    #method to update the chart with new data
     def update_chart(self):
         self.times.append(len(self.times))
         self.syn_counts.append(self.syn_count)
@@ -244,7 +256,6 @@ class MainWindow(tk.Tk):
         self.ax.plot(self.times, self.syn_counts, color="#00FF00")
         self.canvas.draw()
 
-    #method to update the chart dynamically using animation
     def update_chart_animation(self, i):
         self.ax.clear()
         self.ax.set_title('SYN Packets Count', color="#00FF00")
@@ -258,15 +269,291 @@ class MainWindow(tk.Tk):
         self.ax.spines['right'].set_color('#00FF00')
         self.ax.spines['left'].set_color('#00FF00')
 
-    #method to display an alert when SYN packet threshold is reached
     def alert_user(self):
         alert_label = tk.Label(self.hids_frame, text="ALERT: SYN packet threshold reached!", font=("Courier", 18), bg="#1E1E1E", fg="#FF4500")
         alert_label.pack(pady=20)
 
-#entry point of the program
+
 if __name__ == "__main__":
     app = MainWindow()
     app.mainloop()
+
+
+
+
+
+
+
+
+# OLDER VERSION - CURRENTLY WORKING #
+
+# VERSION 3 #
+
+# import tkinter as tk
+# from tkinter import ttk
+# import matplotlib.pyplot as plt
+# from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+# from matplotlib.animation import FuncAnimation
+# from scapy.all import sniff, TCP
+# import threading
+# import psutil 
+# import time
+
+# #define the main GUI window class
+# class MainWindow(tk.Tk):
+#     def __init__(self):
+#         super().__init__() #initialize the parent class (tk.Tk)
+#         self.title("Intrusion Detection System") #set the window title
+#         self.geometry("800x680") #set the initial size of the window
+#         self.configure(bg="#1E1E1E") #set the background color of the window
+
+#         #initialize variables for GUI elements
+#         self.radio_var = tk.StringVar() #variable for holding selected radio button value
+#         self.syn_threshold = tk.IntVar() #variable for SYN packet threshold
+#         self.ports_to_monitor = tk.StringVar() #variable for ports to monitor
+#         self.cpu_threshold = tk.DoubleVar() #variable for CPU usage threshold
+#         self.memory_threshold = tk.DoubleVar() #variable for memory usage threshold
+
+#         #initialize monitoring state and counters
+#         self.syn_count = 0 #counter for detected SYN packets
+#         self.monitoring = False #flag to indicate whether monitoring is active
+#         self.sniff_thread = None #initialize thread for sniffing
+#         self.process_monitoring_thread = None #initialize thread for process monitoring
+
+#         #create the tabbed interface
+#         self.create_tabs()
+
+#     def create_process_monitor_widgets(self, frame):
+#         header = tk.Label(frame, text="Process Monitor", font=("Courier", 24), bg="#1E1E1E", fg="#00FF00")
+#         header.pack(pady=10)
+
+#         # Add widgets for displaying process information
+#         parameters_frame = tk.Frame(frame, bg="#1E1E1E", bd=2, relief=tk.SUNKEN)
+#         parameters_frame.pack(pady=10, padx=10, fill=tk.X)
+
+#         tk.Label(parameters_frame, text="CPU Usage Threshold (%):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+#         self.cpu_threshold_entry = tk.Entry(parameters_frame, textvariable=self.cpu_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
+#         self.cpu_threshold_entry.grid(row=0, column=1, padx=5, pady=5)
+#         self.cpu_threshold.set(80.0)  # Default CPU threshold
+
+#         tk.Label(parameters_frame, text="Memory Usage Threshold (%):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+#         self.memory_threshold_entry = tk.Entry(parameters_frame, textvariable=self.memory_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
+#         self.memory_threshold_entry.grid(row=1, column=1, padx=5, pady=5)
+#         self.memory_threshold.set(80.0)  # Default memory threshold
+
+#         # Add a start/stop button for process monitoring
+#         control_frame = tk.Frame(frame, bg="#1E1E1E")
+#         control_frame.pack(pady=10)
+
+#         start_button = tk.Button(control_frame, text="Start Process Monitoring", bg="#333333", fg="#00FF00", command=self.start_monitoring, font=("Courier", 12), activebackground="#00FF00", activeforeground="#1E1E1E")
+#         start_button.grid(row=0, column=0, padx=5)
+
+#         stop_button = tk.Button(control_frame, text="Stop Process Monitoring", bg="#333333", fg="#FF4500", command=self.stop_monitoring, font=("Courier", 12), activebackground="#FF4500", activeforeground="#1E1E1E")
+#         stop_button.grid(row=0, column=1, padx=5)
+
+#         # Add a placeholder for displaying flagged processes
+#         self.process_alert_label = tk.Label(frame, text="", font=("Courier", 14), bg="#1E1E1E", fg="#FF4500")
+#         self.process_alert_label.pack(pady=10)
+
+#     #method to create tabs in the GUI
+#     def create_tabs(self):
+#         #create a notebook (tabbed interface)
+#         self.notebook = ttk.Notebook(self)
+#         self.notebook.pack(pady=10, expand=True)
+
+#         #create frames for each tab
+#         self.hids_frame = tk.Frame(self.notebook, bg="#1E1E1E")
+#         self.nids_frame = tk.Frame(self.notebook, bg="#1E1E1E")
+#         self.custom_frame = tk.Frame(self.notebook, bg="#1E1E1E")
+#         self.process_monitor_frame = tk.Frame(self.notebook, bg="#1E1E1E")
+
+#         #add frames to notebook (tabs)
+#         self.notebook.add(self.hids_frame, text="HIDS")
+#         self.notebook.add(self.nids_frame, text="NIDS")
+#         self.notebook.add(self.custom_frame, text="Custom")
+#         self.notebook.add(self.process_monitor_frame, text="Process Monitor")
+
+#         #create widgets for each tab
+#         self.create_hids_widgets(self.hids_frame)
+#         self.create_nids_widgets(self.nids_frame)
+#         self.create_custom_widgets(self.custom_frame)
+#         self.create_process_monitor_widgets(self.process_monitor_frame)
+
+#     #method to create widgets for the HIDS tab
+#     def create_hids_widgets(self, frame):
+#         header = tk.Label(frame, text="HIDS - SYN Packet Monitor", font=("Courier", 24), bg="#1E1E1E", fg="#00FF00")
+#         header.pack(pady=10)
+
+#         parameters_frame = tk.Frame(frame, bg="#1E1E1E", bd=2, relief=tk.SUNKEN)
+#         parameters_frame.pack(pady=10, padx=10, fill=tk.X)
+
+#         tk.Label(parameters_frame, text="SYN Packet Threshold:", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+#         self.syn_threshold_entry = tk.Entry(parameters_frame, textvariable=self.syn_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
+#         self.syn_threshold_entry.grid(row=0, column=1, padx=5, pady=5)
+#         self.syn_threshold.set(100) #set default threshold value
+
+#         tk.Label(parameters_frame, text="Ports to Monitor (comma-separated):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+#         self.ports_entry = tk.Entry(parameters_frame, textvariable=self.ports_to_monitor, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
+#         self.ports_entry.grid(row=1, column=1, padx=5, pady=5)
+#         self.ports_to_monitor.set("80,443") #set default ports to monitor
+
+#         #add input fields for CPU and memory usage thresholds
+#         tk.Label(parameters_frame, text="CPU Usage Threshold (%):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
+#         self.cpu_threshold_entry = tk.Entry(parameters_frame, textvariable=self.cpu_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
+#         self.cpu_threshold_entry.grid(row=2, column=1, padx=5, pady=5)
+#         self.cpu_threshold.set(80.0) #default CPU threshold
+
+#         tk.Label(parameters_frame, text="Memory Usage Threshold (%):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
+#         self.memory_threshold_entry = tk.Entry(parameters_frame, textvariable=self.memory_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
+#         self.memory_threshold_entry.grid(row=3, column=1, padx=5, pady=5)
+#         self.memory_threshold.set(80.0) #default memory threshold
+
+#         control_frame = tk.Frame(frame, bg="#1E1E1E")
+#         control_frame.pack(pady=10)
+
+#         start_button = tk.Button(control_frame, text="Start Monitoring", bg="#333333", fg="#00FF00", command=self.start_monitoring, font=("Courier", 12), activebackground="#00FF00", activeforeground="#1E1E1E")
+#         start_button.grid(row=0, column=0, padx=5)
+
+#         stop_button = tk.Button(control_frame, text="Stop Monitoring", bg="#333333", fg="#FF4500", command=self.stop_monitoring, font=("Courier", 12), activebackground="#FF4500", activeforeground="#1E1E1E")
+#         stop_button.grid(row=0, column=1, padx=5)
+
+#         self.create_charts(frame)
+
+#     #method to create widgets for the NIDS tab
+#     def create_nids_widgets(self, frame):
+#         header = tk.Label(frame, text="NIDS - Network Intrusion Detection", font=("Courier", 24), bg="#1E1E1E", fg="#00FF00")
+#         header.pack(pady=10)
+
+#         #add more NIDS-specific input fields and controls here
+
+#     #method to create widgets for the Custom tab
+#     def create_custom_widgets(self, frame):
+#         header = tk.Label(frame, text="Custom Mode", font=("Courier", 24), bg="#1E1E1E", fg="#00FF00")
+#         header.pack(pady=10)
+
+#         #add more custom mode input fields and controls here
+
+#     #method to create charts for displaying SYN packet counts
+#     def create_charts(self, frame):
+#         chart_frame = tk.Frame(frame, bg="#1E1E1E")
+#         chart_frame.pack(pady=10, fill=tk.BOTH, expand=True)
+
+#         self.fig, self.ax = plt.subplots(facecolor="#1E1E1E")
+#         self.canvas = FigureCanvasTkAgg(self.fig, master=chart_frame)
+#         self.canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+#         self.ax.set_title('SYN Packets Count', color="#00FF00")
+#         self.ax.set_xlabel('Time', color="#00FF00")
+#         self.ax.set_ylabel('SYN Packets', color="#00FF00")
+#         self.ax.tick_params(axis='x', colors='#00FF00')
+#         self.ax.tick_params(axis='y', colors='#00FF00')
+#         self.ax.spines['bottom'].set_color('#00FF00')
+#         self.ax.spines['top'].set_color('#00FF00')
+#         self.ax.spines['right'].set_color('#00FF00')
+#         self.ax.spines['left'].set_color('#00FF00')
+
+#         self.times = []
+#         self.syn_counts = []
+
+#         self.anim = FuncAnimation(self.fig, self.update_chart_animation, interval=1000, blit=False)
+
+#     #method to start monitoring SYN packets and process usage
+#     def start_monitoring(self):
+#         self.monitoring = True
+#         self.syn_count = 0
+#         self.monitor_ports = [int(port.strip()) for port in self.ports_to_monitor.get().split(",") if port.strip().isdigit()]
+#         print(f"Monitoring SYN packets on ports: {self.monitor_ports} with threshold {self.syn_threshold.get()}")
+        
+#         #start packet sniffing in a new thread
+#         self.sniff_thread = threading.Thread(target=self.start_packet_sniffing)
+#         self.sniff_thread.daemon = True
+#         self.sniff_thread.start()
+
+#         #start process monitoring in a new thread
+#         self.process_monitoring_thread = threading.Thread(target=self.monitor_processes)
+#         self.process_monitoring_thread.daemon = True
+#         self.process_monitoring_thread.start()
+
+#     #method to stop monitoring SYN packets and processes
+#     def stop_monitoring(self):
+#         self.monitoring = False
+#         print("Stopped monitoring.")
+
+#     #method to start sniffing network packets using Scapy
+#     def start_packet_sniffing(self):
+#         def process_packet(packet):
+#             if not self.monitoring:
+#                 return False
+
+#             if packet.haslayer(TCP) and packet[TCP].flags == 'S' and packet[TCP].dport in self.monitor_ports:
+#                 self.syn_count += 1
+#                 print(f"SYN packet detected on port {packet[TCP].dport}. Total SYN count: {self.syn_count}")
+#                 self.update_chart()
+
+#                 if self.syn_count >= self.syn_threshold.get():
+#                     print("SYN packet threshold reached!")
+#                     self.alert_user()
+#                     self.stop_monitoring()
+
+#         # Run sniff in a separate thread
+#         def sniff_packets():
+#             sniff(prn=process_packet, store=0, stop_filter=lambda x: not self.monitoring)
+
+#         sniff_thread = threading.Thread(target=sniff_packets)
+#         sniff_thread.daemon = True
+#         sniff_thread.start()
+
+#     #method to monitor system processes and kill those over threshold
+#     def monitor_processes(self):
+#         while self.monitoring:
+#             for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+#                 try:
+#                     cpu_usage = proc.info['cpu_percent']
+#                     memory_usage = proc.info['memory_percent']
+
+#                     if cpu_usage > self.cpu_threshold.get() or memory_usage > self.memory_threshold.get():
+#                         print(f"Killing process {proc.info['name']} (PID: {proc.info['pid']}) for exceeding thresholds. CPU: {cpu_usage}%, Memory: {memory_usage}%")
+#                         proc.terminate() #terminate the process
+
+#                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+#                     pass
+
+#             time.sleep(5) #check processes every 5 seconds
+
+#     #method to update the chart with new data
+#     def update_chart(self):
+#         self.times.append(len(self.times))
+#         self.syn_counts.append(self.syn_count)
+#         self.ax.clear()
+#         self.ax.set_title('SYN Packets Count', color="#00FF00")
+#         self.ax.set_xlabel('Time', color="#00FF00")
+#         self.ax.set_ylabel('SYN Packets', color="#00FF00")
+#         self.ax.plot(self.times, self.syn_counts, color="#00FF00")
+#         self.canvas.draw()
+
+#     #method to update the chart dynamically using animation
+#     def update_chart_animation(self, i):
+#         self.ax.clear()
+#         self.ax.set_title('SYN Packets Count', color="#00FF00")
+#         self.ax.set_xlabel('Time', color="#00FF00")
+#         self.ax.set_ylabel('SYN Packets', color="#00FF00")
+#         self.ax.plot(self.times, self.syn_counts, color="#00FF00")
+#         self.ax.tick_params(axis='x', colors='#00FF00')
+#         self.ax.tick_params(axis='y', colors='#00FF00')
+#         self.ax.spines['bottom'].set_color('#00FF00')
+#         self.ax.spines['top'].set_color('#00FF00')
+#         self.ax.spines['right'].set_color('#00FF00')
+#         self.ax.spines['left'].set_color('#00FF00')
+
+#     #method to display an alert when SYN packet threshold is reached
+#     def alert_user(self):
+#         alert_label = tk.Label(self.hids_frame, text="ALERT: SYN packet threshold reached!", font=("Courier", 18), bg="#1E1E1E", fg="#FF4500")
+#         alert_label.pack(pady=20)
+
+# #entry point of the program
+# if __name__ == "__main__":
+#     app = MainWindow()
+#     app.mainloop()
 
 
 
@@ -741,164 +1028,164 @@ if __name__ == "__main__":
 
 # VERSION 1 #
 
-import tkinter as tk
-from tkinter import ttk
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import pandas as pd
-import json
-from datetime import datetime
-from scapy.all import sniff, IP, TCP
-from matplotlib.animation import FuncAnimation
+# import tkinter as tk
+# from tkinter import ttk
+# import matplotlib.pyplot as plt
+# from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+# import pandas as pd
+# import json
+# from datetime import datetime
+# from scapy.all import sniff, IP, TCP
+# from matplotlib.animation import FuncAnimation
 
 
-class MainWindow(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("HIDS - SYN Packet Monitor")
-        self.geometry("800x680")
-        self.configure(bg="#1E1E1E")
+# class MainWindow(tk.Tk):
+#     def __init__(self):
+#         super().__init__()
+#         self.title("HIDS - SYN Packet Monitor")
+#         self.geometry("800x680")
+#         self.configure(bg="#1E1E1E")
 
-        self.radio_var = tk.StringVar()
-        self.syn_threshold = tk.IntVar()
-        self.ports_to_monitor = tk.StringVar()
+#         self.radio_var = tk.StringVar()
+#         self.syn_threshold = tk.IntVar()
+#         self.ports_to_monitor = tk.StringVar()
 
-        self.syn_count = 0
-        self.monitoring = False
+#         self.syn_count = 0
+#         self.monitoring = False
 
-        self.create_widgets()
-        self.create_charts()
+#         self.create_widgets()
+#         self.create_charts()
 
-    def create_widgets(self):
-        #header
-        self.create_header()
+#     def create_widgets(self):
+#         #header
+#         self.create_header()
 
-        #parameters box
-        self.create_parameters_box()
+#         #parameters box
+#         self.create_parameters_box()
 
-        #start/Stop Monitoring buttons
-        self.create_monitoring_controls()
+#         #start/Stop Monitoring buttons
+#         self.create_monitoring_controls()
 
-        #footer
-        #self.create_footer()
+#         #footer
+#         #self.create_footer()
 
-    def create_header(self):
-        header_frame = tk.Frame(self, bg="#1E1E1E")
-        header_frame.pack(pady=10)
+#     def create_header(self):
+#         header_frame = tk.Frame(self, bg="#1E1E1E")
+#         header_frame.pack(pady=10)
 
-        header = tk.Label(header_frame, text="HIDS - SYN Packet Monitor", font=("Courier", 24), bg="#1E1E1E", fg="#00FF00")
-        header.pack()
+#         header = tk.Label(header_frame, text="HIDS - SYN Packet Monitor", font=("Courier", 24), bg="#1E1E1E", fg="#00FF00")
+#         header.pack()
 
-    def create_parameters_box(self):
-        parameters_frame = tk.Frame(self, bg="#1E1E1E", bd=2, relief=tk.SUNKEN)
-        parameters_frame.pack(pady=10, padx=10, fill=tk.X)
+#     def create_parameters_box(self):
+#         parameters_frame = tk.Frame(self, bg="#1E1E1E", bd=2, relief=tk.SUNKEN)
+#         parameters_frame.pack(pady=10, padx=10, fill=tk.X)
 
-        tk.Label(parameters_frame, text="SYN Packet Threshold:", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        self.syn_threshold_entry = tk.Entry(parameters_frame, textvariable=self.syn_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
-        self.syn_threshold_entry.grid(row=0, column=1, padx=5, pady=5)
-        self.syn_threshold.set(100)  #default threshold
+#         tk.Label(parameters_frame, text="SYN Packet Threshold:", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+#         self.syn_threshold_entry = tk.Entry(parameters_frame, textvariable=self.syn_threshold, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
+#         self.syn_threshold_entry.grid(row=0, column=1, padx=5, pady=5)
+#         self.syn_threshold.set(100)  #default threshold
 
-        tk.Label(parameters_frame, text="Ports to Monitor (comma-separated):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        self.ports_entry = tk.Entry(parameters_frame, textvariable=self.ports_to_monitor, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
-        self.ports_entry.grid(row=1, column=1, padx=5, pady=5)
-        self.ports_to_monitor.set("80,443")  #default ports to monitor
+#         tk.Label(parameters_frame, text="Ports to Monitor (comma-separated):", font=("Courier", 14), bg="#1E1E1E", fg="#00FF00").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+#         self.ports_entry = tk.Entry(parameters_frame, textvariable=self.ports_to_monitor, width=20, bg="#2E2E2E", fg="#00FF00", insertbackground="#00FF00", font=("Courier", 12))
+#         self.ports_entry.grid(row=1, column=1, padx=5, pady=5)
+#         self.ports_to_monitor.set("80,443")  #default ports to monitor
 
-    def create_monitoring_controls(self):
-        control_frame = tk.Frame(self, bg="#1E1E1E")
-        control_frame.pack(pady=10)
+#     def create_monitoring_controls(self):
+#         control_frame = tk.Frame(self, bg="#1E1E1E")
+#         control_frame.pack(pady=10)
 
-        start_button = tk.Button(control_frame, text="Start Monitoring", bg="#333333", fg="#00FF00", command=self.start_monitoring, font=("Courier", 12), activebackground="#00FF00", activeforeground="#1E1E1E")
-        start_button.grid(row=0, column=0, padx=5)
+#         start_button = tk.Button(control_frame, text="Start Monitoring", bg="#333333", fg="#00FF00", command=self.start_monitoring, font=("Courier", 12), activebackground="#00FF00", activeforeground="#1E1E1E")
+#         start_button.grid(row=0, column=0, padx=5)
 
-        stop_button = tk.Button(control_frame, text="Stop Monitoring", bg="#333333", fg="#FF4500", command=self.stop_monitoring, font=("Courier", 12), activebackground="#FF4500", activeforeground="#1E1E1E")
-        stop_button.grid(row=0, column=1, padx=5)
+#         stop_button = tk.Button(control_frame, text="Stop Monitoring", bg="#333333", fg="#FF4500", command=self.stop_monitoring, font=("Courier", 12), activebackground="#FF4500", activeforeground="#1E1E1E")
+#         stop_button.grid(row=0, column=1, padx=5)
 
-    def create_charts(self):
-        #placeholder frame for charts
-        chart_frame = tk.Frame(self, bg="#1E1E1E")
-        chart_frame.pack(pady=10, fill=tk.BOTH, expand=True)
+#     def create_charts(self):
+#         #placeholder frame for charts
+#         chart_frame = tk.Frame(self, bg="#1E1E1E")
+#         chart_frame.pack(pady=10, fill=tk.BOTH, expand=True)
 
-        self.fig, self.ax = plt.subplots(facecolor="#1E1E1E")
-        self.canvas = FigureCanvasTkAgg(self.fig, master=chart_frame)
-        self.canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+#         self.fig, self.ax = plt.subplots(facecolor="#1E1E1E")
+#         self.canvas = FigureCanvasTkAgg(self.fig, master=chart_frame)
+#         self.canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.ax.set_title('SYN Packets Count', color="#00FF00")
-        self.ax.set_xlabel('Time', color="#00FF00")
-        self.ax.set_ylabel('SYN Packets', color="#00FF00")
-        self.ax.tick_params(axis='x', colors='#00FF00')
-        self.ax.tick_params(axis='y', colors='#00FF00')
-        self.ax.spines['bottom'].set_color('#00FF00')
-        self.ax.spines['top'].set_color('#00FF00')
-        self.ax.spines['right'].set_color('#00FF00')
-        self.ax.spines['left'].set_color('#00FF00')
+#         self.ax.set_title('SYN Packets Count', color="#00FF00")
+#         self.ax.set_xlabel('Time', color="#00FF00")
+#         self.ax.set_ylabel('SYN Packets', color="#00FF00")
+#         self.ax.tick_params(axis='x', colors='#00FF00')
+#         self.ax.tick_params(axis='y', colors='#00FF00')
+#         self.ax.spines['bottom'].set_color('#00FF00')
+#         self.ax.spines['top'].set_color('#00FF00')
+#         self.ax.spines['right'].set_color('#00FF00')
+#         self.ax.spines['left'].set_color('#00FF00')
 
-        #initialize empty lists to store the data for the dynamic chart
-        self.times = []
-        self.syn_counts = []
+#         #initialize empty lists to store the data for the dynamic chart
+#         self.times = []
+#         self.syn_counts = []
 
-        #start the chart animation
-        self.anim = FuncAnimation(self.fig, self.update_chart_animation, interval=1000, blit=False)
+#         #start the chart animation
+#         self.anim = FuncAnimation(self.fig, self.update_chart_animation, interval=1000, blit=False)
 
-    #def create_footer(self):
-    #    footer = tk.Label(self, text="© Levi, Ray and Shoup, Inc. 2024", font=("Courier", 18), bg="#1E1E1E", fg="#00FF00")
-    #    footer.pack(pady=10)
+#     #def create_footer(self):
+#     #    footer = tk.Label(self, text="© Levi, Ray and Shoup, Inc. 2024", font=("Courier", 18), bg="#1E1E1E", fg="#00FF00")
+#     #    footer.pack(pady=10)
 
-    def start_monitoring(self):
-        self.monitoring = True
-        self.syn_count = 0
-        self.monitor_ports = [int(port.strip()) for port in self.ports_to_monitor.get().split(",") if port.strip().isdigit()]
-        print(f"Monitoring SYN packets on ports: {self.monitor_ports} with threshold {self.syn_threshold.get()}")
-        self.start_packet_sniffing()
+#     def start_monitoring(self):
+#         self.monitoring = True
+#         self.syn_count = 0
+#         self.monitor_ports = [int(port.strip()) for port in self.ports_to_monitor.get().split(",") if port.strip().isdigit()]
+#         print(f"Monitoring SYN packets on ports: {self.monitor_ports} with threshold {self.syn_threshold.get()}")
+#         self.start_packet_sniffing()
 
-    def stop_monitoring(self):
-        self.monitoring = False
-        print("Stopped monitoring.")
+#     def stop_monitoring(self):
+#         self.monitoring = False
+#         print("Stopped monitoring.")
 
-    def start_packet_sniffing(self):
-        def process_packet(packet):
-            if not self.monitoring:
-                return False  #stop sniffing
+#     def start_packet_sniffing(self):
+#         def process_packet(packet):
+#             if not self.monitoring:
+#                 return False  #stop sniffing
 
-            if packet.haslayer(TCP) and packet[TCP].flags == 'S' and packet[TCP].dport in self.monitor_ports:
-                self.syn_count += 1
-                print(f"SYN packet detected on port {packet[TCP].dport}. Total SYN count: {self.syn_count}")
-                self.update_chart()
+#             if packet.haslayer(TCP) and packet[TCP].flags == 'S' and packet[TCP].dport in self.monitor_ports:
+#                 self.syn_count += 1
+#                 print(f"SYN packet detected on port {packet[TCP].dport}. Total SYN count: {self.syn_count}")
+#                 self.update_chart()
 
-                if self.syn_count >= self.syn_threshold.get():
-                    print("SYN packet threshold reached!")
-                    self.alert_user()
+#                 if self.syn_count >= self.syn_threshold.get():
+#                     print("SYN packet threshold reached!")
+#                     self.alert_user()
 
-        sniff(prn=process_packet, store=0, stop_filter=lambda x: not self.monitoring)
+#         sniff(prn=process_packet, store=0, stop_filter=lambda x: not self.monitoring)
 
-    def update_chart(self):
-        self.times.append(len(self.times))
-        self.syn_counts.append(self.syn_count)
-        self.ax.clear()
-        self.ax.set_title('SYN Packets Count', color="#00FF00")
-        self.ax.set_xlabel('Time', color="#00FF00")
-        self.ax.set_ylabel('SYN Packets', color="#00FF00")
-        self.ax.plot(self.times, self.syn_counts, color="#00FF00")
-        self.canvas.draw()
+#     def update_chart(self):
+#         self.times.append(len(self.times))
+#         self.syn_counts.append(self.syn_count)
+#         self.ax.clear()
+#         self.ax.set_title('SYN Packets Count', color="#00FF00")
+#         self.ax.set_xlabel('Time', color="#00FF00")
+#         self.ax.set_ylabel('SYN Packets', color="#00FF00")
+#         self.ax.plot(self.times, self.syn_counts, color="#00FF00")
+#         self.canvas.draw()
 
-    def update_chart_animation(self, i):
-        #update the chart with new data (if any)
-        self.ax.clear()
-        self.ax.set_title('SYN Packets Count', color="#00FF00")
-        self.ax.set_xlabel('Time', color="#00FF00")
-        self.ax.set_ylabel('SYN Packets', color="#00FF00")
-        self.ax.plot(self.times, self.syn_counts, color="#00FF00")
-        self.ax.tick_params(axis='x', colors='#00FF00')
-        self.ax.tick_params(axis='y', colors='#00FF00')
-        self.ax.spines['bottom'].set_color('#00FF00')
-        self.ax.spines['top'].set_color('#00FF00')
-        self.ax.spines['right'].set_color('#00FF00')
-        self.ax.spines['left'].set_color('#00FF00')
+#     def update_chart_animation(self, i):
+#         #update the chart with new data (if any)
+#         self.ax.clear()
+#         self.ax.set_title('SYN Packets Count', color="#00FF00")
+#         self.ax.set_xlabel('Time', color="#00FF00")
+#         self.ax.set_ylabel('SYN Packets', color="#00FF00")
+#         self.ax.plot(self.times, self.syn_counts, color="#00FF00")
+#         self.ax.tick_params(axis='x', colors='#00FF00')
+#         self.ax.tick_params(axis='y', colors='#00FF00')
+#         self.ax.spines['bottom'].set_color('#00FF00')
+#         self.ax.spines['top'].set_color('#00FF00')
+#         self.ax.spines['right'].set_color('#00FF00')
+#         self.ax.spines['left'].set_color('#00FF00')
 
-    def alert_user(self):
-        alert_label = tk.Label(self, text="ALERT: SYN packet threshold reached!", font=("Courier", 18), bg="#1E1E1E", fg="#FF4500")
-        alert_label.pack(pady=20)
+#     def alert_user(self):
+#         alert_label = tk.Label(self, text="ALERT: SYN packet threshold reached!", font=("Courier", 18), bg="#1E1E1E", fg="#FF4500")
+#         alert_label.pack(pady=20)
 
 
-if __name__ == "__main__":
-    app = MainWindow()
-    app.mainloop()
+# if __name__ == "__main__":
+#     app = MainWindow()
+#     app.mainloop()
